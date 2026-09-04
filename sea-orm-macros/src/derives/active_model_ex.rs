@@ -1227,7 +1227,6 @@ impl HasManySelfField<'_> {
         let relation_variant = quote!(Relation::#relation_variant);
 
         let delete_associated_model = quote! {
-            let mut item = item.into_active_model();
             if item.clear_parent_key_for_self_rev(#relation_variant)? {
                 item.update(db)#await_?;
             } else {
@@ -1237,16 +1236,26 @@ impl HasManySelfField<'_> {
         };
 
         let has_many_before_action = quote! {
-            let #field_binding = self.#ident.take();
+            let mut #field_binding = self.#ident.take();
         };
 
         let has_many_action = quote! {
-            if #field_binding.is_replace() {
-                for item in model.find_belongs_to_self(#relation_variant, db.get_database_backend())?.all(db)#await_? {
-                    if !#field_binding.find(&item) {
+            match #field_binding {
+                ActiveHasMany::Replace(_) => {
+                    for item in model.find_belongs_to_self(#relation_variant, db.get_database_backend())?.all(db)#await_? {
+                        if !#field_binding.find(&item) {
+                            let mut item = item.into_active_model();
+                            #delete_associated_model
+                        }
+                    }
+                },
+                ActiveHasMany::Mutate(ref mut mutations) => {
+                    let deletes = std::mem::take(mutations.delete_as_mut_vec());
+                    for mut item in deletes {
                         #delete_associated_model
                     }
-                }
+                },
+                _ => ()
             }
             model.#ident = #field_binding.empty_holder();
             for mut #field_binding in #field_binding.into_vec() {
@@ -1262,6 +1271,7 @@ impl HasManySelfField<'_> {
 
         let has_many_delete = quote! {
             for item in self.find_belongs_to_self(#relation_variant, db.get_database_backend())?.all(db)#await_? {
+                let mut item = item.into_active_model();
                 #delete_associated_model
             }
         };
@@ -1352,7 +1362,7 @@ impl HasManyField<'_> {
         let ident = self.ident;
         let field_binding = clone_with_mixed_site_span(ident);
         quote! {
-            let #field_binding = self.#ident.take();
+            let mut #field_binding = self.#ident.take();
         }
     }
 
@@ -1366,21 +1376,39 @@ impl HasManyField<'_> {
         let ident = self.ident;
         let field_binding = clone_with_mixed_site_span(ident);
         let related_entity = self.entity;
-        let delete_associated_model = quote! {
-            let mut item = item.into_active_model();
-            if item.clear_parent_key::<Entity>()? {
-                item.update(db)#await_?;
+        let delete_associated_model_gen = |into_ex: bool| {
+            let merge_tokens = if into_ex {
+                quote! { item.into_ex().delete(db)#await_? }
             } else {
-                deleted.merge(item.into_ex().delete(db)#await_?); // deep delete
+                quote! { item.delete(db)#await_? }
+            };
+            quote! {
+                if item.clear_parent_key::<Entity>()? {
+                    item.update(db)#await_?;
+                } else {
+                    deleted.merge(#merge_tokens); // deep delete
+                }
             }
         };
+        let delete_associated_model_into_ex = delete_associated_model_gen(true);
+        let delete_associated_model = delete_associated_model_gen(false);
         quote! {
-            if #field_binding.is_replace() {
-                for item in model.find_related(#related_entity).all(db)#await_? {
-                    if !#field_binding.find(&item) {
+            match #field_binding {
+                ActiveHasMany::Replace(_) => {
+                    for item in model.find_related(#related_entity).all(db)#await_? {
+                        if !#field_binding.find(&item) {
+                            let mut item = item.into_active_model();
+                            #delete_associated_model_into_ex
+                        }
+                    }
+                },
+                ActiveHasMany::Mutate(ref mut mutations) => {
+                    let deletes = std::mem::take(mutations.delete_as_mut_vec());
+                    for mut item in deletes {
                         #delete_associated_model
                     }
-                }
+                },
+                _ => ()
             }
             model.#ident = #field_binding.empty_holder();
             for mut #field_binding in #field_binding.into_vec() {
