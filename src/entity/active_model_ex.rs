@@ -551,7 +551,7 @@ where
     pub fn find(&self, model: &E::Model) -> bool {
         let pk = model.get_primary_key_value();
 
-        for item in self.iter() {
+        for item in self.as_slice() {
             if let Some(pk_item) = item.get_primary_key_value()
                 && pk_item == pk
             {
