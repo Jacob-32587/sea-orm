@@ -623,66 +623,15 @@ impl<E: EntityTrait> IndexMut<usize> for ActiveHasMany<E> {
     }
 }
 
-#[derive(Debug, Clone)]
-#[doc(hidden)]
-pub enum ActiveHasManyOwnedIter<E: EntityTrait> {
-    Vec(std::vec::IntoIter<E::ActiveModelEx>),
-    Chain(
-        std::iter::Chain<
-            std::vec::IntoIter<E::ActiveModelEx>,
-            std::vec::IntoIter<E::ActiveModelEx>,
-        >,
-    ),
-}
-
-#[derive(Debug, Clone)]
-#[doc(hidden)]
-pub enum ActiveHasManyBorrowedIter<'a, E: EntityTrait> {
-    Slice(std::slice::Iter<'a, E::ActiveModelEx>),
-    Chained(
-        std::iter::Chain<
-            std::slice::Iter<'a, E::ActiveModelEx>,
-            std::slice::Iter<'a, E::ActiveModelEx>,
-        >,
-    ),
-    Empty(std::iter::Empty<&'a E::ActiveModelEx>),
-}
-
-impl<E: EntityTrait> Iterator for ActiveHasManyOwnedIter<E> {
-    type Item = E::ActiveModelEx;
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Vec(i) => i.next(),
-            Self::Chain(i) => i.next(),
-        }
-    }
-}
-
-impl<'a, E: EntityTrait> Iterator for ActiveHasManyBorrowedIter<'a, E> {
-    type Item = &'a E::ActiveModelEx;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::Slice(i) => i.next(),
-            Self::Chained(i) => i.next(),
-            Self::Empty(i) => i.next(),
-        }
-    }
-}
-
 impl<E: EntityTrait> IntoIterator for ActiveHasMany<E> {
     type Item = E::ActiveModelEx;
-    type IntoIter = ActiveHasManyOwnedIter<E>;
+    type IntoIter = std::vec::IntoIter<E::ActiveModelEx>;
 
     fn into_iter(self) -> Self::IntoIter {
         match self {
-            ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => {
-                ActiveHasManyOwnedIter::Vec(models.into_iter())
-            }
-            ActiveHasMany::Mutate(mutations) => {
-                ActiveHasManyOwnedIter::Chain(mutations.into_iter())
-            }
-            ActiveHasMany::NotSet => ActiveHasManyOwnedIter::Vec(Vec::new().into_iter()),
+            ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => models.into_iter(),
+            ActiveHasMany::Mutate(mutations) => mutations.save.into_iter(),
+            ActiveHasMany::NotSet => Vec::new().into_iter(),
         }
     }
 }
