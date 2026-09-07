@@ -60,7 +60,8 @@ pub enum ActiveHasMany<E: EntityTrait> {
     /// deletes.
     Append(Vec<E::ActiveModelEx>),
 
-    /// Persists the related model alongside any existing children
+    /// Persists the related model alongside any existing children with the
+    /// ability to remove models.
     Mutate(Mutation<E>),
 }
 
@@ -71,6 +72,9 @@ pub struct Mutation<E: EntityTrait> {
     delete: Vec<E::ActiveModelEx>,
 }
 
+/// Container that holds models that need to be persisted and deleted
+/// NOTE: The ordering of models are **not** guaranteed after the first
+/// operation is preformed.
 impl<E: EntityTrait> Mutation<E> {
     /// Create an empty container
     pub fn new() -> Self {
