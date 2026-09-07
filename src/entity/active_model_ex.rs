@@ -498,7 +498,7 @@ where
     /// with the given primary key is not loaded no action will be taken.
     /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate] even
     /// if no active model is found
-    pub fn push_delete_existing(&mut self, pk: &ValueTuple) -> &mut Self {
+    pub fn push_delete_existing(&mut self, pk: &sea_query::ValueTuple) -> &mut Self {
         match self {
             Self::Mutate(mutations) => {
                 let some_pk = Some(pk);
