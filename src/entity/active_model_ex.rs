@@ -446,18 +446,80 @@ where
         self
     }
 
-    /// Add an ActiveModelEx that will be deleted on save
-    /// NOTE: Will promote [Self::Replace] & [Self::Append] to [Self::Mutate]
+    /// Add an ActiveModelEx that will be deleted on save. No changes occur
+    /// if the primary key of the given model is not set.
+    /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate]
     pub fn push_delete<AM: Into<E::ActiveModelEx>>(&mut self, model: AM) -> &mut Self {
         let model = model.into();
+
+        let pk = model.get_primary_key_value();
+
+        if pk.is_none() {
+            return self;
+        }
+
         match self {
-            Self::Mutate(mutations) => mutations.delete.push(model),
+            Self::Mutate(mutations) => {
+                let idx = mutations
+                    .save
+                    .iter()
+                    .position(|x| x.get_primary_key_value() == pk);
+
+                if let Some(idx) = idx {
+                    mutations.save.swap_remove(idx);
+                }
+                mutations.delete.push(model)
+            }
             Self::Replace(models) | Self::Append(models) => {
-                let models = std::mem::take(models);
+                let mut models = std::mem::take(models);
+                let idx = models.iter().position(|x| x.get_primary_key_value() == pk);
+
+                if let Some(idx) = idx {
+                    models.swap_remove(idx);
+                }
                 *self = Self::Mutate(Mutation::from_save_and_delete(models, vec![model]));
             }
             Self::NotSet => {
                 *self = Self::Mutate(Mutation::from_delete(vec![model]));
+            }
+        }
+
+        self
+    }
+
+    /// Mark a model loaded into the active model as deleted, if an active model
+    /// with the given primary key is not loaded no action will be taken.
+    /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate] even
+    /// if no active model is found
+    pub fn push_delete_existing(&mut self, pk: &ValueTuple) -> &mut Self {
+        match self {
+            Self::Mutate(mutations) => {
+                let some_pk = Some(pk);
+                let idx = mutations
+                    .save
+                    .iter()
+                    .position(|x| x.get_primary_key_value().as_ref() == some_pk);
+
+                if let Some(idx) = idx {
+                    mutations.delete.push(mutations.save.swap_remove(idx));
+                }
+            }
+            Self::Replace(models) | Self::Append(models) => {
+                let mut models = std::mem::take(models);
+                let some_pk = Some(pk);
+                let idx = models
+                    .iter()
+                    .position(|x| x.get_primary_key_value().as_ref() == some_pk);
+
+                if let Some(idx) = idx {
+                    let model = models.swap_remove(idx);
+                    *self = Self::Mutate(Mutation::from_save_and_delete(models, vec![model]));
+                } else {
+                    *self = Self::Mutate(Mutation::from_save(models));
+                }
+            }
+            Self::NotSet => {
+                *self = Self::Mutate(Mutation::new());
             }
         }
 
