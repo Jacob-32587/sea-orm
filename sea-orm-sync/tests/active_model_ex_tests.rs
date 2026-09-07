@@ -828,6 +828,175 @@ fn test_has_one_replace_and_delete() -> Result<(), DbErr> {
     Ok(())
 }
 
+/// Compare the state of the given active model
+macro_rules! blogger_user_check_db_state {
+    ($db:ident, $am:ident) => {
+        let db_user = user::Entity::load()
+            .filter_by_id(*$am.id.as_ref())
+            .with(profile::Entity)
+            .with(post::Entity)
+            .with((post::Entity, tag::Entity))
+            .one($db)?
+            .expect("Expected user but got None");
+
+        let db_am = db_user.into_active_model();
+
+        let am_str = format!("{:#?}", $am);
+        let db_am_str = format!("{:#?}", db_am);
+        if am_str != db_am_str {
+            panic!(
+                "======= Active Model =======\n{}\n======= DB Active Model =======\n{}",
+                am_str, db_am_str
+            );
+        }
+    };
+}
+
+#[sea_orm_macros::test]
+fn test_has_many_mutate() -> Result<(), DbErr> {
+    use common::blogger::*;
+
+    let ctx = TestContext::new("test_has_many_mutate");
+    let db = &ctx.db;
+
+    db.get_schema_builder()
+        .register(user::Entity)
+        .register(user_follower::Entity)
+        .register(profile::Entity)
+        .register(post::Entity)
+        .register(post_tag::Entity)
+        .register(tag::Entity)
+        .register(attachment::Entity)
+        .register(comment::Entity)
+        .apply(db)?;
+
+    info!("#3061: Creating user with a post that has a comment");
+    let mut user = user::ActiveModel::builder()
+        .set_name("Rick")
+        .set_email("rick@sea-ql.org")
+        .set_profile(profile::ActiveModel::builder().set_picture("first.jpg"))
+        .add_post(
+            post::ActiveModel::builder()
+                .set_title("Amazing Post")
+                .add_tag(tag::ActiveModel::builder().set_tag("Amazing"))
+                .add_tag(tag::ActiveModel::builder().set_tag("Best Post")),
+        )
+        .add_post(
+            post::ActiveModel::builder()
+                .set_title("Cool Post")
+                .add_tag(tag::ActiveModel::builder().set_tag("Cool")),
+        )
+        .save(db)?;
+
+    assert!(user.posts.as_slice().len() == 2);
+
+    blogger_user_check_db_state!(db, user);
+
+    let amazing_post_id = *user.posts[0].id.clone().as_ref();
+    let cool_post_id = *user.posts[1].id.clone().as_ref();
+    let cool_post_pk = user.posts[1].get_primary_key_value().unwrap();
+    let cool_post_tags = user.posts[1].tags.clone();
+
+    info!("#3061: Deleting 'Amazing' post");
+    user = user.delete_post(post::ActiveModel::builder().set_id(amazing_post_id));
+    user = user.save(db)?;
+
+    // Convert posts back to append so the state is consistent with the database model
+    user.posts.convert_to_append();
+
+    blogger_user_check_db_state!(db, user);
+    assert!(user.posts.as_slice().len() == 1);
+
+    info!("#3061: Deleting and adding 'Cool' post");
+    user = user
+        .delete_existing_post(&cool_post_pk)
+        .add_post(
+            post::ActiveModel::builder()
+                .set_id(cool_post_id)
+                .set_title("Really Cool Post"),
+        )
+        .save(db)?;
+
+    // Convert posts back to append and add tag back so the state is consistent with the database model
+    // We expect the tags to persist because the saved active model has them as NotSet
+    user.posts.convert_to_append();
+    user.posts[0].tags = cool_post_tags;
+
+    blogger_user_check_db_state!(db, user);
+    assert!(user.posts.as_slice().len() == 1);
+    assert!(user.posts.as_slice()[0].title.as_ref() == "Really Cool Post");
+
+    ctx.delete();
+
+    Ok(())
+}
+
+#[sea_orm_macros::test]
+fn test_has_many_self_mutate() -> Result<(), DbErr> {
+    use common::film_store::*;
+
+    let ctx = TestContext::new("test_has_many_self_mutate");
+    let db = &ctx.db;
+
+    db.get_schema_builder().register(staff::Entity).apply(db)?;
+
+    let mut staff = staff::ActiveModel::builder()
+        .set_name("Bob")
+        .add_manage(
+            staff::ActiveModel::builder().set_name("Rick").add_manage(
+                staff::ActiveModel::builder()
+                    .set_name("Alice")
+                    .add_manage(staff::ActiveModel::builder().set_name("Sam")),
+            ),
+        )
+        .add_manage(staff::ActiveModel::builder().set_name("Tom"))
+        .save(db)?;
+
+    assert_eq!(staff.manages.as_slice().len(), 2);
+
+    info!("delete rick as staff member managed by bob");
+    let rick_id = *staff.manages[0].id.as_ref();
+    let rick_pk = staff.manages[0].get_primary_key_value().unwrap();
+    staff = staff.delete_existing_manage(&rick_pk).save(db)?;
+
+    assert_eq!(staff.manages.as_slice().len(), 1);
+    assert_eq!(staff.manages.as_slice()[0].name.as_ref(), "Tom");
+
+    //TODO: Currently we do no support selecting deeply nested self referential
+    //relationships. Once we do this code can be simplified by comparing the db model
+    // to converted to an active model the active model in memory. (https://github.com/SeaQL/sea-orm/issues/2942)
+
+    let db_model = staff::Entity::load()
+        .with(staff::Relation::ReportsTo)
+        .with(staff::Relation::Manages)
+        .filter_by_id(*staff.id.as_ref())
+        .one(db)?
+        .unwrap();
+
+    assert_eq!(db_model.manages.len(), 1);
+    assert_eq!(db_model.manages[0].name, "Tom");
+
+    info!("add rick as staff member managed by bob");
+
+    staff = staff
+        .add_manage(staff::ActiveModel::builder().set_id(rick_id))
+        .save(db)?;
+
+    let db_model = staff::Entity::load()
+        .with(staff::Relation::ReportsTo)
+        .with(staff::Relation::Manages)
+        .filter_by_id(*staff.id.as_ref())
+        .one(db)?
+        .unwrap();
+
+    assert_eq!(db_model.manages.len(), 2);
+    assert!(db_model.manages.iter().any(|x| x.name == "Rick"));
+
+    ctx.delete();
+
+    Ok(())
+}
+
 #[sea_orm_macros::test]
 fn test_belongs_to_duplicate_target() -> Result<(), DbErr> {
     use common::blogger::*;

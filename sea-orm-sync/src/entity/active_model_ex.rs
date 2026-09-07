@@ -1,3 +1,5 @@
+use sea_query::ValueTuple;
+
 use super::compound::{BelongsTo, BelongsToCardinality, HasMany, HasOne};
 use crate::{ActiveModelTrait, DbErr, EntityTrait, ModelTrait, TryIntoModel};
 use core::ops::{Index, IndexMut};
@@ -25,7 +27,7 @@ where
 /// State carried by a `has_one` field on an
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx).
 ///
-/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
+/// Unstable: nested `ActiveModel` relation mutation is exempt from semver - the
 /// semantics of setting or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -44,7 +46,7 @@ where
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx). Chooses between
 /// "leave alone", "additive write", and "destructive replace" semantics.
 ///
-/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
+/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver - the
 /// semantics of replacing or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -59,10 +61,108 @@ pub enum ActiveHasMany<E: EntityTrait> {
     /// Persist these related models alongside any existing children; never
     /// deletes.
     Append(Vec<E::ActiveModelEx>),
+
+    /// Persists the related model alongside any existing children with the
+    /// ability to remove models.
+    Mutate(Mutation<E>),
+}
+
+/// Container that holds models to save and delete
+#[derive_where::derive_where(Debug, Clone, PartialEq, Default, Eq; E::ActiveModelEx)]
+pub struct Mutation<E: EntityTrait> {
+    save: Vec<E::ActiveModelEx>,
+    delete: Vec<E::ActiveModelEx>,
+}
+
+/// Container that holds models that need to be persisted and deleted
+/// NOTE: The ordering of models are **not** guaranteed after the first
+/// operation is preformed.
+impl<E: EntityTrait> Mutation<E> {
+    /// Create an empty container
+    pub fn new() -> Self {
+        Self {
+            save: vec![],
+            delete: vec![],
+        }
+    }
+
+    /// Create a container with models to delete and save
+    pub fn from_save_and_delete(
+        save: Vec<E::ActiveModelEx>,
+        delete: Vec<E::ActiveModelEx>,
+    ) -> Self {
+        Self { save, delete }
+    }
+
+    /// Create a container with models to save
+    pub fn from_save(save: Vec<E::ActiveModelEx>) -> Self {
+        Self {
+            save,
+            delete: vec![],
+        }
+    }
+
+    /// Create a container with models to delete
+    pub fn from_delete(save: Vec<E::ActiveModelEx>) -> Self {
+        Self {
+            save,
+            delete: vec![],
+        }
+    }
+
+    /// Get a slice to models that will be saved
+    pub fn save_as_slice(&self) -> &[E::ActiveModelEx] {
+        self.save.as_slice()
+    }
+
+    /// Get a mutable vector to models that will be saved
+    pub fn save_as_mut_vec(&mut self) -> &mut Vec<E::ActiveModelEx> {
+        &mut self.save
+    }
+
+    /// Get a mutable vector to models that will be deleted
+    pub fn delete_as_mut_vec(&mut self) -> &mut Vec<E::ActiveModelEx> {
+        &mut self.delete
+    }
+
+    /// Get a slice to models that will be deleted
+    pub fn delete_as_slice(&self) -> &[E::ActiveModelEx] {
+        self.delete.as_slice()
+    }
+
+    /// Consume [self] and produce a single [Vec] of all
+    /// models in the container
+    pub fn into_vec(mut self) -> Vec<E::ActiveModelEx> {
+        self.save.extend(self.delete);
+        self.save
+    }
+
+    /// Consume [self] and produce a single [Vec] of models
+    /// to be saved
+    pub fn into_save_vec(self) -> Vec<E::ActiveModelEx> {
+        self.save
+    }
+
+    /// Iterate over all models in the container
+    pub fn iter<I>(&self) -> impl Iterator<Item = &E::ActiveModelEx> {
+        self.save.iter().chain(self.delete.iter())
+    }
+}
+
+impl<E: EntityTrait> IntoIterator for Mutation<E> {
+    type Item = E::ActiveModelEx;
+    type IntoIter = std::iter::Chain<
+        std::vec::IntoIter<E::ActiveModelEx>,
+        std::vec::IntoIter<E::ActiveModelEx>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.save.into_iter().chain(self.delete)
+    }
 }
 
 /// Which save operation an [`ActiveModel`](crate::ActiveModelTrait) is about
-/// to perform — used by hooks and helpers that need to branch on the kind
+/// to perform - used by hooks and helpers that need to branch on the kind
 /// of write.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ActiveModelAction {
@@ -280,17 +380,23 @@ where
     }
 
     /// Borrow models as slice
+    /// NOTE: For [Self::Mutate] this will only return models that
+    /// will be saved.
     pub fn as_slice(&self) -> &[E::ActiveModelEx] {
         match self {
             Self::Replace(models) | Self::Append(models) => models,
+            Self::Mutate(mutations) => &mutations.save,
             Self::NotSet => &[],
         }
     }
 
     /// Get a mutable vec. If self is `NotSet`, convert to append.
+    /// NOTE: For [Self::Mutate] this will only return models that
+    /// will be saved.
     pub fn as_mut_vec(&mut self) -> &mut Vec<E::ActiveModelEx> {
         match self {
             Self::Replace(models) | Self::Append(models) => models,
+            Self::Mutate(mutations) => mutations.save_as_mut_vec(),
             Self::NotSet => {
                 *self = Self::Append(vec![]);
                 self.as_mut_vec()
@@ -299,9 +405,12 @@ where
     }
 
     /// Consume self as vector
+    /// NOTE: For [Self::Mutate] this will only return models that
+    /// will be saved.
     pub fn into_vec(self) -> Vec<E::ActiveModelEx> {
         match self {
             Self::Replace(models) | Self::Append(models) => models,
+            Self::Mutate(mutations) => mutations.into_save_vec(),
             Self::NotSet => vec![],
         }
     }
@@ -311,17 +420,115 @@ where
         match self {
             Self::Replace(_) => Self::Replace(vec![]),
             Self::Append(_) => Self::Append(vec![]),
+            Self::Mutate(_) => Self::Mutate(Mutation::new()),
             Self::NotSet => Self::NotSet,
         }
     }
 
     /// Push an item to self
+    ///
+    /// If [Self::Mutate] and the given model matches a loaded model
+    /// marked for deletion that model will not longer be deleted.
     pub fn push<AM: Into<E::ActiveModelEx>>(&mut self, model: AM) -> &mut Self {
         let model = model.into();
         match self {
             Self::Replace(models) | Self::Append(models) => models.push(model),
+            Self::Mutate(mutations) => {
+                let pk = model.get_primary_key_value();
+                if pk.is_some() {
+                    let idx = mutations
+                        .delete
+                        .iter()
+                        .position(|x| x.get_primary_key_value() == pk);
+
+                    if let Some(idx) = idx {
+                        mutations.delete.swap_remove(idx);
+                    }
+                }
+                mutations.save.push(model)
+            }
             Self::NotSet => {
                 *self = Self::Append(vec![model]);
+            }
+        }
+
+        self
+    }
+
+    /// Add an ActiveModelEx that will be deleted on save. No changes occur
+    /// if the primary key of the given model is not set.
+    /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate]
+    pub fn push_delete<AM: Into<E::ActiveModelEx>>(&mut self, model: AM) -> &mut Self {
+        let model = model.into();
+
+        let pk = model.get_primary_key_value();
+
+        if pk.is_none() {
+            return self;
+        }
+
+        match self {
+            Self::Mutate(mutations) => {
+                let idx = mutations
+                    .save
+                    .iter()
+                    .position(|x| x.get_primary_key_value() == pk);
+
+                if let Some(idx) = idx {
+                    mutations.save.swap_remove(idx);
+                }
+                mutations.delete.push(model)
+            }
+            Self::Replace(models) | Self::Append(models) => {
+                let mut models = std::mem::take(models);
+                let idx = models.iter().position(|x| x.get_primary_key_value() == pk);
+
+                if let Some(idx) = idx {
+                    models.swap_remove(idx);
+                }
+                *self = Self::Mutate(Mutation::from_save_and_delete(models, vec![model]));
+            }
+            Self::NotSet => {
+                *self = Self::Mutate(Mutation::from_delete(vec![model]));
+            }
+        }
+
+        self
+    }
+
+    /// Mark a model loaded into the active model as deleted, if an active model
+    /// with the given primary key is not loaded no action will be taken.
+    /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate] even
+    /// if no active model is found
+    pub fn push_delete_existing(&mut self, pk: &ValueTuple) -> &mut Self {
+        match self {
+            Self::Mutate(mutations) => {
+                let some_pk = Some(pk);
+                let idx = mutations
+                    .save
+                    .iter()
+                    .position(|x| x.get_primary_key_value().as_ref() == some_pk);
+
+                if let Some(idx) = idx {
+                    mutations.delete.push(mutations.save.swap_remove(idx));
+                }
+            }
+            Self::Replace(models) | Self::Append(models) => {
+                let mut models = std::mem::take(models);
+                let some_pk = Some(pk);
+                let idx = models
+                    .iter()
+                    .position(|x| x.get_primary_key_value().as_ref() == some_pk);
+
+                if let Some(idx) = idx {
+                    let model = models.swap_remove(idx);
+                    *self = Self::Mutate(Mutation::from_save_and_delete(models, vec![model]));
+                } else {
+                    *self = Self::Mutate(Mutation::from_save(models));
+                }
+            }
+            Self::NotSet => {
+                *self = Self::Mutate(Mutation::new());
             }
         }
 
@@ -342,11 +549,33 @@ where
         self
     }
 
-    /// Convert self to Append, if set
+    /// Convert [self] to [Self::Append], if set
+    /// NOTE: If converting [self::Mutation] only models
+    /// that will be saved/inserted will be retained
     pub fn convert_to_append(&mut self) -> &mut Self {
         match self.take() {
             Self::Replace(models) | Self::Append(models) => {
                 *self = Self::Append(models);
+            }
+            Self::Mutate(mutations) => {
+                *self = Self::Append(mutations.save);
+            }
+            Self::NotSet => {
+                *self = Self::NotSet;
+            }
+        }
+
+        self
+    }
+
+    /// Convert [self] to [Self::Mutate], if set
+    pub fn convert_to_mutation(&mut self) -> &mut Self {
+        match self.take() {
+            Self::Replace(models) | Self::Append(models) => {
+                *self = Self::Mutate(Mutation::from_save(models));
+            }
+            Self::Mutate(mutations) => {
+                *self = Self::Mutate(mutations);
             }
             Self::NotSet => {
                 *self = Self::NotSet;
@@ -371,11 +600,20 @@ where
         matches!(self, Self::Append(_))
     }
 
+    /// If self is `Mutate`
+    pub fn is_mutate(&self) -> bool {
+        matches!(self, Self::Mutate(_))
+    }
+
     /// Return true if self is `Replace` or any containing model is changed
     pub fn is_changed(&self) -> bool {
         match self {
             Self::Replace(_) => true,
             Self::Append(models) => models.iter().any(|model| model.is_changed()),
+            Self::Mutate(mutations) => {
+                !mutations.delete.is_empty()
+                    || mutations.save.iter().any(|model| model.is_changed())
+            }
             Self::NotSet => false,
         }
     }
@@ -407,6 +645,12 @@ where
                     .map(|t| t.try_into_model())
                     .collect::<Result<Vec<_>, DbErr>>()?,
             ),
+            Self::Mutate(mutations) => HasMany::Loaded(
+                mutations
+                    .into_iter()
+                    .map(|t| t.try_into_model())
+                    .collect::<Result<Vec<_>, DbErr>>()?,
+            ),
             Self::NotSet => HasMany::Unloaded,
         })
     }
@@ -417,6 +661,7 @@ impl<E: EntityTrait> From<ActiveHasMany<E>> for Option<Vec<E::ActiveModelEx>> {
         match value {
             ActiveHasMany::NotSet => None,
             ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => Some(models),
+            ActiveHasMany::Mutate(mutations) => Some(mutations.into_vec()),
         }
     }
 }
@@ -430,6 +675,7 @@ impl<E: EntityTrait> Index<usize> for ActiveHasMany<E> {
                 panic!("index out of bounds: the ActiveHasMany is NotSet (index: {index})")
             }
             ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => models.index(index),
+            ActiveHasMany::Mutate(mutations) => mutations.save.index(index),
         }
     }
 }
@@ -443,6 +689,7 @@ impl<E: EntityTrait> IndexMut<usize> for ActiveHasMany<E> {
             ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => {
                 models.index_mut(index)
             }
+            ActiveHasMany::Mutate(mutations) => mutations.save.index_mut(index),
         }
     }
 }
@@ -454,6 +701,7 @@ impl<E: EntityTrait> IntoIterator for ActiveHasMany<E> {
     fn into_iter(self) -> Self::IntoIter {
         match self {
             ActiveHasMany::Replace(models) | ActiveHasMany::Append(models) => models.into_iter(),
+            ActiveHasMany::Mutate(mutations) => mutations.save.into_iter(),
             ActiveHasMany::NotSet => Vec::new().into_iter(),
         }
     }
