@@ -384,19 +384,6 @@ where
         }
     }
 
-    /// Iterate over all models being mutated
-    pub fn iter(&self) -> ActiveHasManyBorrowedIter<'_, E> {
-        match self {
-            Self::Replace(models) | Self::Append(models) => {
-                ActiveHasManyBorrowedIter::Slice(models.iter())
-            }
-            Self::Mutate(mutations) => ActiveHasManyBorrowedIter::Chained(
-                mutations.save.iter().chain(mutations.delete.iter()),
-            ),
-            Self::NotSet => ActiveHasManyBorrowedIter::Empty(std::iter::empty()),
-        }
-    }
-
     /// Get a mutable vec. If self is `NotSet`, convert to append.
     /// NOTE: For [Self::Mutate] this will only return models that
     /// will be saved.
