@@ -25,7 +25,7 @@ where
 /// State carried by a `has_one` field on an
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx).
 ///
-/// Unstable: nested `ActiveModel` relation mutation is exempt from semver - the
+/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
 /// semantics of setting or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -44,7 +44,7 @@ where
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx). Chooses between
 /// "leave alone", "additive write", and "destructive replace" semantics.
 ///
-/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver - the
+/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
 /// semantics of replacing or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -160,7 +160,7 @@ impl<E: EntityTrait> IntoIterator for Mutation<E> {
 }
 
 /// Which save operation an [`ActiveModel`](crate::ActiveModelTrait) is about
-/// to perform - used by hooks and helpers that need to branch on the kind
+/// to perform — used by hooks and helpers that need to branch on the kind
 /// of write.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ActiveModelAction {

@@ -1,5 +1,3 @@
-use sea_query::ValueTuple;
-
 use super::compound::{BelongsTo, BelongsToCardinality, HasMany, HasOne};
 use crate::{ActiveModelTrait, DbErr, EntityTrait, ModelTrait, TryIntoModel};
 use core::ops::{Index, IndexMut};
@@ -27,7 +25,7 @@ where
 /// State carried by a `has_one` field on an
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx).
 ///
-/// Unstable: nested `ActiveModel` relation mutation is exempt from semver - the
+/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
 /// semantics of setting or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -46,7 +44,7 @@ where
 /// [`ActiveModelEx`](crate::EntityTrait::ActiveModelEx). Chooses between
 /// "leave alone", "additive write", and "destructive replace" semantics.
 ///
-/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver - the
+/// Unstable: nested-`ActiveModel` relation mutation is exempt from semver — the
 /// semantics of replacing or removing related records may change in a minor (2.x) release.
 #[derive_where::derive_where(Debug, Clone, PartialEq, Eq; E::ActiveModelEx)]
 #[derive(Default)]
@@ -162,7 +160,7 @@ impl<E: EntityTrait> IntoIterator for Mutation<E> {
 }
 
 /// Which save operation an [`ActiveModel`](crate::ActiveModelTrait) is about
-/// to perform - used by hooks and helpers that need to branch on the kind
+/// to perform — used by hooks and helpers that need to branch on the kind
 /// of write.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ActiveModelAction {
@@ -500,7 +498,7 @@ where
     /// with the given primary key is not loaded no action will be taken.
     /// NOTE: Will promote [Self::Replace], [Self::Append], & [Self::NotSet] to [Self::Mutate] even
     /// if no active model is found
-    pub fn push_delete_existing(&mut self, pk: &ValueTuple) -> &mut Self {
+    pub fn push_delete_existing(&mut self, pk: &sea_query::ValueTuple) -> &mut Self {
         match self {
             Self::Mutate(mutations) => {
                 let some_pk = Some(pk);
