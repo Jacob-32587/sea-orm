@@ -433,11 +433,27 @@ where
     }
 
     /// Push an item to self
+    ///
+    /// If [Self::Mutate] and the given model matches a loaded model
+    /// marked for deletion that model will not longer be deleted.
     pub fn push<AM: Into<E::ActiveModelEx>>(&mut self, model: AM) -> &mut Self {
         let model = model.into();
         match self {
             Self::Replace(models) | Self::Append(models) => models.push(model),
-            Self::Mutate(mutations) => mutations.save.push(model),
+            Self::Mutate(mutations) => {
+                let pk = model.get_primary_key_value();
+                if pk.is_some() {
+                    let idx = mutations
+                        .delete
+                        .iter()
+                        .position(|x| x.get_primary_key_value() == pk);
+
+                    if let Some(idx) = idx {
+                        mutations.delete.swap_remove(idx);
+                    }
+                }
+                mutations.save.push(model)
+            }
             Self::NotSet => {
                 *self = Self::Append(vec![model]);
             }
